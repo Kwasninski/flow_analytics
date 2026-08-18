@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analiza Przepływu — Kanban Flow Analytics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg: #0F1620;
+    --panel: #161F2B;
+    --panel-alt: #1C2733;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.16);
+    --text: #E7EDF3;
+    --muted: #8CA0B3;
+    --muted-dim: #5D7085;
+    --backlog: #3E5064;
+    --progress: #E8A33D;
+    --done: #3FA796;
+    --alert: #D1667A;
+    --accent: #6FCF97;
+    --radius: 10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(63,167,150,0.10), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 0%, rgba(232,163,61,0.07), transparent 55%),
+      var(--bg);
+    color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;
+    min-height:100vh;
+    padding:32px 24px 80px;
+  }
+  .wrap{max-width:1180px;margin:0 auto;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ---------- header ---------- */
+  header.top{margin-bottom:36px;}
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--muted-dim);margin-bottom:10px;
+  }
+  h1{
+    font-family:'Space Grotesk',sans-serif;
+    font-weight:700;font-size:34px;line-height:1.1;margin:0 0 8px;
+    letter-spacing:-0.01em;
+  }
+  header.top p{color:var(--muted);font-size:15px;max-width:640px;margin:0;line-height:1.55;}
+  .flowline{
+    margin-top:22px;height:3px;border-radius:3px;overflow:hidden;
+    background:linear-gradient(90deg,var(--backlog) 0%,var(--backlog) 30%,var(--progress) 30%,var(--progress) 68%,var(--done) 68%,var(--done) 100%);
+    position:relative;
+  }
+  .flowline::after{
+    content:"";position:absolute;inset:0;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);
+    width:35%;animation:flow 3.2s linear infinite;
+  }
+  @keyframes flow{0%{transform:translateX(-120%);}100%{transform:translateX(340%);}}
+  @media (prefers-reduced-motion: reduce){.flowline::after{animation:none;display:none;}}
+
+  /* ---------- cards / panels ---------- */
+  .card{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:24px;
+    margin-bottom:20px;
+  }
+  .card h2{
+    font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:600;
+    margin:0 0 4px;display:flex;align-items:center;gap:10px;
+  }
+  .card .sub{color:var(--muted);font-size:13px;margin:0 0 18px;line-height:1.5;}
+  .badge{
+    font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;
+    padding:2px 8px;border-radius:20px;border:1px solid var(--border-strong);
+    color:var(--muted);text-transform:uppercase;
+  }
+
+  /* ---------- dropzone ---------- */
+  #dropzone{
+    border:1.5px dashed var(--border-strong);
+    border-radius:var(--radius);
+    padding:56px 24px;
+    text-align:center;
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+    background:var(--panel-alt);
+  }
+  #dropzone:hover, #dropzone.drag{
+    border-color:var(--done);
+    background:rgba(63,167,150,0.06);
+  }
+  #dropzone .icon{font-size:30px;margin-bottom:14px;opacity:.8;}
+  #dropzone .main{font-size:15px;font-weight:500;margin-bottom:6px;}
+  #dropzone .hint{color:var(--muted);font-size:12.5px;}
+  #fileInput{display:none;}
+
+  /* ---------- forms ---------- */
+  label.field-label{
+    display:block;font-size:12px;color:var(--muted);margin-bottom:6px;
+    font-family:'JetBrains Mono',monospace;letter-spacing:.03em;
+  }
+  select, input[type=date], input[type=text]{
+    width:100%;background:var(--panel-alt);border:1px solid var(--border-strong);
+    color:var(--text);padding:9px 10px;border-radius:7px;font-size:13.5px;
+    font-family:'Inter',sans-serif;
+  }
+  select:focus, input:focus{outline:2px solid var(--done);outline-offset:1px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+  @media (max-width:720px){.grid2,.grid3{grid-template-columns:1fr;}}
+  .field{margin-bottom:14px;}
+
+  .btn{
+    font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px;
+    background:var(--done);color:#08221D;border:none;border-radius:7px;
+    padding:11px 20px;cursor:pointer;transition:filter .15s, transform .1s;
+  }
+  .btn:hover{filter:brightness(1.1);}
+  .btn:active{transform:scale(.98);}
+  .btn.secondary{
+    background:transparent;border:1px solid var(--border-strong);color:var(--text);
+  }
+  .btn.small{padding:6px 12px;font-size:12.5px;}
+  .btn:disabled{opacity:.4;cursor:not-allowed;}
+
+  /* status classification chips */
+  .status-map-row{
+    display:flex;align-items:center;gap:12px;justify-content:space-between;
+    padding:9px 12px;background:var(--panel-alt);border-radius:7px;margin-bottom:6px;
+    border:1px solid var(--border);
+  }
+  .status-map-row .name{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--text);}
+  .status-map-row .count{color:var(--muted-dim);font-size:11px;}
+  .status-map-row select{width:170px;}
+
+  /* ---------- preview table ---------- */
+  .tbl-scroll{max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:7px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  thead th{
+    position:sticky;top:0;background:var(--panel-alt);text-align:left;padding:8px 10px;
+    color:var(--muted);font-family:'JetBrains Mono',monospace;font-weight:500;font-size:11px;
+    border-bottom:1px solid var(--border-strong);white-space:nowrap;
+  }
+  tbody td{padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text);white-space:nowrap;}
+  tbody tr:hover{background:rgba(255,255,255,0.02);}
+
+  /* ---------- stat cards ---------- */
+  .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+  @media (max-width:900px){.stats-row{grid-template-columns:1fr 1fr;}}
+  .stat{
+    background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:18px 20px;
+  }
+  .stat .label{font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted-dim);margin-bottom:10px;}
+  .stat .value{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;line-height:1;}
+  .stat .value small{font-size:14px;font-weight:500;color:var(--muted);}
+  .stat .foot{margin-top:8px;font-size:11.5px;color:var(--muted);}
+
+  /* ---------- filter bar ---------- */
+  .filterbar{
+    display:flex;flex-wrap:wrap;gap:14px;align-items:end;padding:16px 20px;
+    background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    margin-bottom:20px;
+  }
+  .filterbar .field{margin:0;min-width:150px;flex:0 0 auto;}
+  .filterbar .field.grow{flex:1;}
+
+  .chart-wrap{position:relative;}
+  .chart-wrap canvas{max-height:340px;}
+  .legend-inline{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;}
+  .legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);}
+  .swatch{width:10px;height:10px;border-radius:3px;display:inline-block;}
+
+  #dashboard, #mapping{display:none;}
+  .hidden{display:none !important;}
+
+  .aging-row{display:grid;grid-template-columns:110px 1fr 60px;gap:10px;align-items:center;padding:6px 0;}
+  .aging-row .key{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);}
+  .aging-bar-bg{background:var(--panel-alt);border-radius:4px;height:16px;overflow:hidden;}
+  .aging-bar{height:100%;border-radius:4px;}
+  .aging-row .days{font-family:'JetBrains Mono',monospace;font-size:12px;text-align:right;}
+
+  footer{text-align:center;color:var(--muted-dim);font-size:11.5px;margin-top:50px;font-family:'JetBrains Mono',monospace;}
+
+  #errorBox{
+    display:none;background:rgba(209,102,122,0.1);border:1px solid var(--alert);
+    color:#F3B9C4;padding:12px 16px;border-radius:8px;font-size:13px;margin-bottom:16px;
+  }
+  .top-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="eyebrow">// analiza przepływu pracy</div>
+    <h1>Flow Analytics dla zespołu</h1>
+    <p>Wgraj eksport z eazyBI (CSV lub XLSX), zmapuj kolumny i statusy, a narzędzie policzy Cycle Time, Lead Time, Throughput, WIP, CFD i raport starzenia się zadań — licząc wszystko lokalnie, w przeglądarce.</p>
+    <div class="flowline"></div>
+  </header>
+
+  <div id="errorBox"></div>
+
+  <!-- STEP 1: UPLOAD -->
+  <section class="card" id="uploadCard">
+    <h2>1. Wgraj dane <span class="badge">csv / xlsx</span></h2>
+    <p class="sub">Najlepiej sprawdzi się eksport z raportu eazyBI typu „Time in Status” (log statusów: klucz zadania, status, data wejścia) albo prosta tabela z datami Utworzono / Rozpoczęto / Zakończono.</p>
+    <div id="dropzone">
+      <div class="icon">⇪</div>
+      <div class="main">Przeciągnij plik tutaj, albo kliknij aby wybrać</div>
+      <div class="hint">.csv, .xlsx — dane pozostają w Twojej przeglądarce, nigdzie nie są wysyłane</div>
+      <input type="file" id="fileInput" accept=".csv,.xlsx,.xls">
+    </div>
+  </section>
+
+  <!-- STEP 2: MAPPING -->
+  <section class="card" id="mapping">
+    <div class="top-actions">
+      <h2 style="margin:0;">2. Zmapuj kolumny i statusy</h2>
+      <button class="btn secondary small" id="btnReset">Wgraj inny plik</button>
+    </div>
+    <p class="sub" id="mappingHint"></p>
+
+    <div class="field">
+      <label class="field-label">FORMAT DANYCH</label>
+      <div class="grid2">
+        <div>
+          <select id="formatSelect">
+            <option value="log">Log statusów (jeden wiersz = zadanie + status + data)</option>
+            <option value="summary">Podsumowanie (jeden wiersz = zadanie z datami Utworzono/Start/Koniec)</option>
+          </select>
+        </div>
+        <div></div>
+      </div>
+    </div>
+
+    <div id="logMappingFields" class="grid3">
+      <div class="field">
+        <label class="field-label">KLUCZ ZADANIA</label>
+        <select id="mapKey"></select>
+      </div>
+      <div class="field">
+        <label class="field-label">STATUS</label>
+        <select id="mapStatus"></select>
+      </div>
+      <div class="field">
+        <label class="field-label">DATA WEJŚCIA W STATUS</label>
+        <select id="mapDate"></select>
+      </div>
+    </div>
+
+    <div id="summaryMappingFields" class="grid3" style="display:none;">
+      <div class="field">
+        <label class="field-label">KLUCZ ZADANIA</label>
+        <select id="mapKey2"></select>
+      </div>
+      <div class="field">
+        <label class="field-label">DATA UTWORZENIA</label>
+        <select id="mapCreated"></select>
+      </div>
+      <div class="field">
+        <label class="field-label">DATA ROZPOCZĘCIA (opcjonalnie)</label>
+        <select id="mapStarted"></select>
+      </div>
+      <div class="field">
+        <label class="field-label">DATA ZAKOŃCZENIA</label>
+        <select id="mapDone"></select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="field-label">TYP ZADANIA (opcjonalnie, do filtrowania)</label>
+      <select id="mapType"></select>
+    </div>
+
+    <div id="statusClassifyBlock" class="field">
+      <label class="field-label">SKLASYFIKUJ STATUSY (do której fazy przepływu należą)</label>
+      <p class="sub" style="margin-bottom:10px;">Zgadliśmy klasyfikację na podstawie nazw statusów — popraw jeśli trzeba.</p>
+      <div id="statusMapList"></div>
+    </div>
+
+    <div class="field" style="margin-top:10px;">
+      <label class="field-label">PODGLĄD DANYCH (pierwsze 8 wierszy)</label>
+      <div class="tbl-scroll"><table id="previewTable"></table></div>
+    </div>
+
+    <button class="btn" id="btnAnalyze" style="margin-top:16px;">Analizuj przepływ →</button>
+  </section>
+
+  <!-- STEP 3: DASHBOARD -->
+  <section id="dashboard">
+
+    <div class="filterbar">
+      <div class="field">
+        <label class="field-label">OD</label>
+        <input type="date" id="filterFrom">
+      </div>
+      <div class="field">
+        <label class="field-label">DO</label>
+        <input type="date" id="filterTo">
+      </div>
+      <div class="field" id="filterTypeWrap" style="display:none;">
+        <label class="field-label">TYP ZADANIA</label>
+        <select id="filterType"><option value="">Wszystkie</option></select>
+      </div>
+      <div class="field grow"></div>
+      <button class="btn secondary small" id="btnResetFilters">Wyczyść filtry</button>
+      <button class="btn secondary small" id="btnBackToMapping">← Zmień mapowanie</button>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat">
+        <div class="label">Throughput (zakres)</div>
+        <div class="value" id="statThroughput">–</div>
+        <div class="foot" id="statThroughputFoot"></div>
+      </div>
+      <div class="stat">
+        <div class="label">Mediana Cycle Time</div>
+        <div class="value" id="statCycle">–</div>
+        <div class="foot" id="statCycleFoot"></div>
+      </div>
+      <div class="stat">
+        <div class="label">Mediana Lead Time</div>
+        <div class="value" id="statLead">–</div>
+        <div class="foot" id="statLeadFoot"></div>
+      </div>
+      <div class="stat">
+        <div class="label">WIP obecnie</div>
+        <div class="value" id="statWip">–</div>
+        <div class="foot" id="statWipFoot"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Cumulative Flow Diagram <span class="badge">CFD</span></h2>
+      <p class="sub">Skumulowana liczba zadań, które osiągnęły daną fazę przepływu, w czasie. Szerokość pasma „W toku” to w przybliżeniu WIP; jego wzrost sygnalizuje wąskie gardło.</p>
+      <div class="chart-wrap"><canvas id="cfdChart"></canvas></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Cycle Time — rozkład i percentyle</h2>
+        <p class="sub">Czas od rozpoczęcia pracy do ukończenia. Linie pokazują 50/70/85/95 percentyl — użyj ich do prognozowania (np. „85% zadań kończy się w ≤ X dni”).</p>
+        <div class="chart-wrap"><canvas id="cycleHistChart"></canvas></div>
+        <div class="legend-inline" id="cycleLegend"></div>
+      </div>
+      <div class="card">
+        <h2>Throughput tygodniowy</h2>
+        <p class="sub">Liczba ukończonych zadań w każdym tygodniu — mierzy realną przepustowość zespołu.</p>
+        <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>WIP w czasie</h2>
+        <p class="sub">Liczba zadań jednocześnie „w toku”. Zgodnie z prawem Little'a: Cycle Time ≈ WIP / Throughput — im wyższe WIP przy stałym throughput, tym dłuższy cycle time.</p>
+        <div class="chart-wrap"><canvas id="wipChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>Raport starzenia (Aging)</h2>
+        <p class="sub">Zadania obecnie w toku, posortowane wg wieku. Kolor względem percentyli historycznego Cycle Time.</p>
+        <div id="agingList" style="max-height:300px;overflow:auto;"></div>
+        <div class="legend-inline" style="margin-top:12px;">
+          <span class="legend-item"><span class="swatch" style="background:var(--done)"></span> &lt; 50. percentyl</span>
+          <span class="legend-item"><span class="swatch" style="background:var(--progress)"></span> 50.–85. percentyl</span>
+          <span class="legend-item"><span class="swatch" style="background:var(--alert)"></span> &gt; 85. percentyl</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="top-actions">
+        <h2 style="margin:0;">Zadania — szczegóły</h2>
+        <button class="btn secondary small" id="btnExportCsv">Eksportuj CSV</button>
+      </div>
+      <div class="tbl-scroll" style="max-height:420px;"><table id="issueTable"></table></div>
+    </div>
+
+  </section>
+
+  <footer>flow analytics — dane przetwarzane lokalnie w przeglądarce, nic nie opuszcza tego urządzenia</footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================= STATE ============================= */
+  let rawRows = [];        // parsed rows from file, array of objects
+  let headers = [];        // column names
+  let issues = [];         // unified: {key, type, created, started, done}
+  let statusClassification = {}; // statusValue -> 'backlog' | 'progress' | 'done' | 'ignore'
+  let uniqueStatuses = [];
+
+  const $ = (id) => document.getElementById(id);
+
+  function showError(msg){
+    const box = $('errorBox');
+    box.textContent = msg;
+    box.style.display = 'block';
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+  function clearError(){ $('errorBox').style.display='none'; }
+
+  /* ============================= FILE PARSING ============================= */
+  const dropzone = $('dropzone');
+  const fileInput = $('fileInput');
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('drag');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length) handleFile(e.target.files[0]);
+  });
+
+  function handleFile(file){
+    clearError();
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.csv')){
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: (res) => {
+          if (res.errors && res.errors.length){
+            console.warn('CSV parse warnings', res.errors);
+          }
+          ingestData(res.data, res.meta.fields || []);
+        },
+        error: (err) => showError('Nie udało się wczytać pliku CSV: ' + err.message)
+      });
+    } else if (name.endsWith('.xlsx') || name.endsWith('.xls')){
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        try{
+          const wb = XLSX.read(evt.target.result, {type:'array', cellDates:true});
+          const sheetName = wb.SheetNames[0];
+          const sheet = wb.Sheets[sheetName];
+          const json = XLSX.utils.sheet_to_json(sheet, {defval:''});
+          const fields = json.length ? Object.keys(json[0]) : [];
+          ingestData(json, fields);
+        } catch(err){
+          showError('Nie udało się wczytać pliku Excel: ' + err.message);
+        }
+      };
+      reader.onerror = () => showError('Błąd odczytu pliku.');
+      reader.readAsArrayBuffer(file);
+    } else {
+      showError('Nieobsługiwany format pliku. Użyj .csv lub .xlsx.');
+    }
+  }
+
+  function ingestData(rows, fields){
+    rows = rows.filter(r => Object.values(r).some(v => v !== '' && v !== null && v !== undefined));
+    if (!rows.length){
+      showError('Plik wygląda na pusty albo nie udało się odczytać wierszy.');
+      return;
+    }
+    rawRows = rows;
+    headers = fields.length ? fields : Object.keys(rows[0]);
+    $('uploadCard').style.display = 'none';
+    $('mapping').style.display = 'block';
+    $('mappingHint').textContent = `Wczytano ${rawRows.length} wierszy, ${headers.length} kolumn.`;
+    populateMappingSelects();
+    guessFormatAndMapping();
+    renderPreviewTable();
+  }
+
+  /* ============================= COLUMN MAPPING UI ============================= */
+  function populateMappingSelects(){
+    const selects = ['mapKey','mapStatus','mapDate','mapKey2','mapCreated','mapStarted','mapDone','mapType'];
+    selects.forEach(id => {
+      const el = $(id);
+      el.innerHTML = '';
+      if (id === 'mapStarted' || id === 'mapType'){
+        const opt = document.createElement('option');
+        opt.value=''; opt.textContent='— brak / nie dotyczy —';
+        el.appendChild(opt);
+      }
+      headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h; opt.textContent = h;
+        el.appendChild(opt);
+      });
+    });
+  }
+
+  function guessCol(patterns){
+    const lower = headers.map(h => h.toLowerCase());
+    for (const p of patterns){
+      const idx = lower.findIndex(h => h.includes(p));
+      if (idx !== -1) return headers[idx];
+    }
+    return null;
+  }
+
+  function guessFormatAndMapping(){
+    // decide log vs summary: if we find both a "created" col and "done/resolved" col AND no generic status+date-entered pair => summary
+    const keyCol = guessCol(['issue key','klucz','key','id zadania','issue id']) || headers[0];
+    const statusCol = guessCol(['status']);
+    const enteredCol = guessCol(['entered', 'wejści', 'transition date', 'data zmiany', 'changed', 'data statusu']);
+    const createdCol = guessCol(['created','utworz']);
+    const startedCol = guessCol(['started','rozpocz','start date']);
+    const doneCol = guessCol(['resolved','done','zakończ','zamkni','completed','closed date']);
+    const typeCol = guessCol(['issue type','typ zadania','type']);
+
+    let mode = 'log';
+    if (createdCol && doneCol && !(statusCol && enteredCol)) mode = 'summary';
+    if (statusCol && enteredCol) mode = 'log';
+
+    $('formatSelect').value = mode;
+    toggleFormatFields(mode);
+
+    if (keyCol){ $('mapKey').value = keyCol; $('mapKey2').value = keyCol; }
+    if (statusCol) $('mapStatus').value = statusCol;
+    if (enteredCol) $('mapDate').value = enteredCol;
+    else if (createdCol) $('mapDate').value = createdCol;
+    if (createdCol) $('mapCreated').value = createdCol;
+    if (startedCol) $('mapStarted').value = startedCol;
+    if (doneCol) $('mapDone').value = doneCol;
+    if (typeCol) $('mapType').value = typeCol; else $('mapType').value = '';
+
+    if (mode === 'log' && statusCol){
+      buildStatusClassificationUI(statusCol);
+    }
+  }
+
+  $('formatSelect').addEventListener('change', (e) => {
+    toggleFormatFields(e.target.value);
+    if (e.target.value === 'log') buildStatusClassificationUI($('mapStatus').value);
+  });
+  $('mapStatus').addEventListener('change', (e) => buildStatusClassificationUI(e.target.value));
+
+  function toggleFormatFields(mode){
+    $('logMappingFields').style.display = mode === 'log' ? 'grid' : 'none';
+    $('summaryMappingFields').style.display = mode === 'summary' ? 'grid' : 'none';
+    $('statusClassifyBlock').style.display = mode === 'log' ? 'block' : 'none';
+  }
+
+  function buildStatusClassificationUI(statusCol){
+    if (!statusCol) return;
+    const counts = {};
+    rawRows.forEach(r => {
+      const v = (r[statusCol] ?? '').toString().trim();
+      if (!v) return;
+      counts[v] = (counts[v]||0)+1;
+    });
+    uniqueStatuses = Object.keys(counts).sort((a,b)=>counts[b]-counts[a]);
+
+    statusClassification = {};
+    uniqueStatuses.forEach(s => {
+      const low = s.toLowerCase();
+      if (/(done|closed|resolved|zamkni|zakończ|ukończ|wdrożon|released|deployed)/.test(low)) statusClassification[s]='done';
+      else if (/(progress|review|testing|qa|dev|in dev|analiz|do zrobienia w toku|wykonyw|realizacj)/.test(low)) statusClassification[s]='progress';
+      else if (/(backlog|to do|todo|new|otwart|nowe|zgłoszon|open)/.test(low)) statusClassification[s]='backlog';
+      else statusClassification[s]='progress';
+    });
+
+    const container = $('statusMapList');
+    container.innerHTML = '';
+    uniqueStatuses.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'status-map-row';
+      row.innerHTML = `
+        <div>
+          <div class="name">${escapeHtml(s)}</div>
+          <div class="count">${counts[s]} wpisów</div>
+        </div>
+      `;
+      const sel = document.createElement('select');
+      sel.innerHTML = `
+        <option value="backlog">Backlog / Do zrobienia</option>
+        <option value="progress">W toku (liczy się do WIP)</option>
+        <option value="done">Zakończone</option>
+        <option value="ignore">Ignoruj ten status</option>
+      `;
+      sel.value = statusClassification[s];
+      sel.addEventListener('change', () => { statusClassification[s] = sel.value; });
+      row.appendChild(sel);
+      container.appendChild(row);
+    });
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function renderPreviewTable(){
+    const table = $('previewTable');
+    const cols = headers.slice(0, 10);
+    let html = '<thead><tr>' + cols.map(h=>`<th>${escapeHtml(h)}</th>`).join('') + '</tr></thead><tbody>';
+    rawRows.slice(0,8).forEach(r => {
+      html += '<tr>' + cols.map(c => `<td>${escapeHtml(r[c] ?? '')}</td>`).join('') + '</tr>';
+    });
+    html += '</tbody>';
+    table.innerHTML = html;
+  }
+
+  $('btnReset').addEventListener('click', () => {
+    rawRows = []; headers = []; issues = [];
+    $('mapping').style.display = 'none';
+    $('uploadCard').style.display = 'block';
+    fileInput.value = '';
+    clearError();
+  });
+
+  /* ============================= DATE PARSING ============================= */
+  function parseDate(val){
+    if (val === null || val === undefined || val === '') return null;
+    if (val instanceof Date && !isNaN(val)) return val;
+    if (typeof val === 'number'){
+      // excel serial date fallback
+      const d = XLSX.SSF ? XLSX.SSF.parse_date_code(val) : null;
+      if (d) return new Date(Date.UTC(d.y, d.m-1, d.d, d.H||0, d.M||0, d.S||0));
+    }
+    const str = String(val).trim();
+    if (!str) return null;
+    // try native
+    let d = new Date(str);
+    if (!isNaN(d)) return d;
+    // try DD/MM/YYYY or DD.MM.YYYY
+    let m = str.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
+    if (m){
+      let [_, a, b, y] = m;
+      if (y.length===2) y = '20'+y;
+      d = new Date(+y, +b-1, +a);
+      if (!isNaN(d)) return d;
+    }
+    return null;
+  }
+
+  function dayKey(d){
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  function addDays(d, n){ const r = new Date(d); r.setDate(r.getDate()+n); return r; }
+  function daysBetween(a,b){ return (b-a)/86400000; }
+
+  /* ============================= BUILD UNIFIED ISSUES ============================= */
+  function buildIssues(){
+    const mode = $('formatSelect').value;
+    const typeCol = $('mapType').value;
+    let result = [];
+
+    if (mode === 'log'){
+      const keyCol = $('mapKey').value;
+      const statusCol = $('mapStatus').value;
+      const dateCol = $('mapDate').value;
+      if (!keyCol || !statusCol || !dateCol){
+        throw new Error('Uzupełnij mapowanie: klucz zadania, status i datę wejścia w status.');
+      }
+      const byKey = {};
+      rawRows.forEach(r => {
+        const key = (r[keyCol] ?? '').toString().trim();
+        if (!key) return;
+        const status = (r[statusCol] ?? '').toString().trim();
+        const date = parseDate(r[dateCol]);
+        if (!date) return;
+        if (!byKey[key]) byKey[key] = { key, type: typeCol ? (r[typeCol]||'').toString().trim() : '', entries: [] };
+        byKey[key].entries.push({status, date});
+        if (typeCol && !byKey[key].type) byKey[key].type = (r[typeCol]||'').toString().trim();
+      });
+      Object.values(byKey).forEach(issue => {
+        issue.entries.sort((a,b) => a.date - b.date);
+        let created = issue.entries[0].date;
+        let started = null, done = null;
+        for (const e of issue.entries){
+          const cls = statusClassification[e.status];
+          if (cls === 'progress' && !started) started = e.date;
+          if (cls === 'done' && !done) done = e.date;
+        }
+        // if done reached but started never explicitly recorded, treat created as started (edge case)
+        if (done && !started) started = created;
+        result.push({ key: issue.key, type: issue.type || '(brak)', created, started, done });
+      });
+    } else {
+      const keyCol = $('mapKey2').value;
+      const createdCol = $('mapCreated').value;
+      const startedCol = $('mapStarted').value;
+      const doneCol = $('mapDone').value;
+      if (!keyCol || !createdCol || !doneCol){
+        throw new Error('Uzupełnij mapowanie: klucz zadania, datę utworzenia i datę zakończenia.');
+      }
+      rawRows.forEach(r => {
+        const key = (r[keyCol] ?? '').toString().trim();
+        if (!key) return;
+        const created = parseDate(r[createdCol]);
+        const started = startedCol ? parseDate(r[startedCol]) : null;
+        const done = doneCol ? parseDate(r[doneCol]) : null;
+        if (!created) return;
+        result.push({
+          key, type: typeCol ? (r[typeCol]||'').toString().trim() || '(brak)' : '(brak)',
+          created, started: started || created, done
+        });
+      });
+    }
+    return result;
+  }
+
+  /* ============================= ANALYZE ============================= */
+  $('btnAnalyze').addEventListener('click', () => {
+    clearError();
+    try{
+      issues = buildIssues();
+      if (!issues.length){
+        showError('Nie udało się zbudować listy zadań — sprawdź mapowanie kolumn.');
+        return;
+      }
+      $('mapping').style.display = 'none';
+      $('dashboard').style.display = 'block';
+      setupFilters();
+      runDashboard();
+      window.scrollTo({top:0, behavior:'smooth'});
+    } catch(err){
+      showError(err.message);
+    }
+  });
+
+  $('btnBackToMapping').addEventListener('click', () => {
+    $('dashboard').style.display = 'none';
+    $('mapping').style.display = 'block';
+  });
+
+  /* ============================= FILTERS ============================= */
+  function setupFilters(){
+    const types = Array.from(new Set(issues.map(i => i.type).filter(Boolean))).sort();
+    const typeSel = $('filterType');
+    typeSel.innerHTML = '<option value="">Wszystkie</option>' + types.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+    $('filterTypeWrap').style.display = types.length > 1 ? 'block' : 'none';
+
+    const allDates = [];
+    issues.forEach(i => { if(i.created) allDates.push(i.created); if(i.done) allDates.push(i.done); });
+    if (allDates.length){
+      const min = new Date(Math.min(...allDates));
+      const max = new Date(Math.max(...allDates));
+      $('filterFrom').value = dayKey(min);
+      $('filterTo').value = dayKey(max);
+    }
+
+    $('filterFrom').onchange = runDashboard;
+    $('filterTo').onchange = runDashboard;
+    $('filterType').onchange = runDashboard;
+    $('btnResetFilters').onclick = () => {
+      setupFilters();
+      runDashboard();
+    };
+  }
+
+  function getFiltered(){
+    const from = $('filterFrom').value ? new Date($('filterFrom').value+'T00:00:00') : null;
+    const to = $('filterTo').value ? new Date($('filterTo').value+'T23:59:59') : null;
+    const type = $('filterType').value;
+    return issues.filter(i => {
+      if (type && i.type !== type) return false;
+      // include issue if it overlaps the range at all (created before "to", and (done after "from" or not done))
+      if (to && i.created && i.created > to) return false;
+      if (from && i.done && i.done < from) return false;
+      return true;
+    });
+  }
+
+  /* ============================= METRICS HELPERS ============================= */
+  function percentile(arr, p){
+    if (!arr.length) return null;
+    const sorted = [...arr].sort((a,b)=>a-b);
+    const idx = Math.ceil((p/100) * sorted.length) - 1;
+    return sorted[Math.min(Math.max(idx,0), sorted.length-1)];
+  }
+  function median(arr){ return percentile(arr, 50); }
+  function fmtDays(d){ return d === null || d === undefined ? '–' : d.toFixed(1); }
+
+  /* ============================= CHARTS (instances kept for destroy/redraw) ============================= */
+  let charts = {};
+  function destroyChart(id){ if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+  const CHART_DEFAULTS = {
+    color: '#8CA0B3',
+    font: { family: "'Inter', sans-serif", size: 11 }
+  };
+
+  /* ============================= MAIN DASHBOARD RENDER ============================= */
+  function runDashboard(){
+    const filtered = getFiltered();
+    const doneIssues = filtered.filter(i => i.done && i.started);
+    const cycleTimes = doneIssues.map(i => Math.max(daysBetween(i.started, i.done), 0.01));
+    const leadTimes = filtered.filter(i=>i.done && i.created).map(i => Math.max(daysBetween(i.created, i.done), 0.01));
+
+    // ---- stat cards ----
+    const from = $('filterFrom').value ? new Date($('filterFrom').value+'T00:00:00') : null;
+    const to = $('filterTo').value ? new Date($('filterTo').value+'T23:59:59') : null;
+    const throughputCount = doneIssues.filter(i => (!from || i.done>=from) && (!to || i.done<=to)).length;
+    const rangeDays = (from && to) ? Math.max(daysBetween(from,to),1) : null;
+    $('statThroughput').textContent = throughputCount;
+    $('statThroughputFoot').textContent = rangeDays ? `≈ ${(throughputCount/(rangeDays/7)).toFixed(1)} zadań / tydzień` : 'ukończonych zadań w zakresie';
+
+    $('statCycle').innerHTML = fmtDays(median(cycleTimes)) + ' <small>dni</small>';
+    $('statCycleFoot').textContent = cycleTimes.length ? `p85: ${fmtDays(percentile(cycleTimes,85))} dni · n=${cycleTimes.length}` : 'brak danych';
+
+    $('statLead').innerHTML = fmtDays(median(leadTimes)) + ' <small>dni</small>';
+    $('statLeadFoot').textContent = leadTimes.length ? `p85: ${fmtDays(percentile(leadTimes,85))} dni · n=${leadTimes.length}` : 'brak danych';
+
+    const wipNow = issues.filter(i => i.started && !i.done).length;
+    $('statWip').textContent = wipNow;
+    $('statWipFoot').textContent = 'zadań aktualnie w toku (wszystkie, bez filtra dat)';
+
+    renderCFD(filtered, from, to);
+    renderCycleHistogram(cycleTimes);
+    renderThroughputChart(doneIssues);
+    renderWipChart(filtered, from, to);
+    renderAging(cycleTimes);
+    renderIssueTable(filtered);
+  }
+
+  /* ---- CFD ---- */
+  function renderCFD(list, from, to){
+    const relevant = list.filter(i => i.created);
+    if (!relevant.length){ destroyChart('cfd'); return; }
+    let start = from || new Date(Math.min(...relevant.map(i=>i.created)));
+    let end = to || new Date(Math.max(...relevant.map(i => i.done || i.started || i.created)));
+    const days = Math.max(Math.ceil(daysBetween(start,end)), 1);
+    const maxPoints = 180;
+    const step = Math.max(1, Math.ceil(days/maxPoints));
+
+    const labels = [];
+    const backlogArr = [], progressArr=[], doneArr=[];
+    for (let d=0; d<=days; d+=step){
+      const day = addDays(start, d);
+      const cBacklog = relevant.filter(i => i.created <= day).length;
+      const cProgress = relevant.filter(i => i.started && i.started <= day).length;
+      const cDone = relevant.filter(i => i.done && i.done <= day).length;
+      labels.push(day.toLocaleDateString('pl-PL', {day:'2-digit', month:'2-digit', year:'2-digit'}));
+      doneArr.push(cDone);
+      progressArr.push(Math.max(cProgress - cDone, 0));
+      backlogArr.push(Math.max(cBacklog - cProgress, 0));
+    }
+
+    destroyChart('cfd');
+    charts.cfd = new Chart($('cfdChart'), {
+      type:'line',
+      data:{ labels, datasets:[
+        { label:'Zakończone', data:doneArr, backgroundColor:'#3FA79688', borderColor:'#3FA796', fill:true, stack:'s', pointRadius:0, borderWidth:1, tension:0.15 },
+        { label:'W toku', data:progressArr, backgroundColor:'#E8A33D77', borderColor:'#E8A33D', fill:true, stack:'s', pointRadius:0, borderWidth:1, tension:0.15 },
+        { label:'Backlog', data:backlogArr, backgroundColor:'#3E506488', borderColor:'#3E5064', fill:true, stack:'s', pointRadius:0, borderWidth:1, tension:0.15 },
+      ]},
+      options:{
+        responsive:true,
+        interaction:{mode:'index', intersect:false},
+        scales:{
+          x:{ stacked:true, ticks:{...CHART_DEFAULTS, maxTicksLimit:10}, grid:{color:'rgba(255,255,255,0.05)'} },
+          y:{ stacked:true, ticks:CHART_DEFAULTS, grid:{color:'rgba(255,255,255,0.05)'}, title:{display:true,text:'liczba zadań',color:'#8CA0B3'} }
+        },
+        plugins:{ legend:{ labels:{...CHART_DEFAULTS} } }
+      }
+    });
+  }
+
+  /* ---- cycle time histogram ---- */
+  function renderCycleHistogram(cycleTimes){
+    destroyChart('cycleHist');
+    $('cycleLegend').innerHTML = '';
+    if (!cycleTimes.length) return;
+    const max = Math.max(...cycleTimes);
+    const binCount = Math.min(16, Math.max(5, Math.ceil(Math.sqrt(cycleTimes.length))));
+    const binSize = Math.max(max/binCount, 0.5);
+    const bins = new Array(binCount).fill(0);
+    cycleTimes.forEach(v => {
+      let idx = Math.floor(v/binSize);
+      if (idx>=binCount) idx = binCount-1;
+      bins[idx]++;
+    });
+    const labels = bins.map((_,i)=> `${(i*binSize).toFixed(0)}-${((i+1)*binSize).toFixed(0)}`);
+
+    const p50 = percentile(cycleTimes,50), p70 = percentile(cycleTimes,70), p85 = percentile(cycleTimes,85), p95 = percentile(cycleTimes,95);
+
+    charts.cycleHist = new Chart($('cycleHistChart'), {
+      type:'bar',
+      data:{ labels, datasets:[{ label:'Liczba zadań', data:bins, backgroundColor:'#3FA796aa', borderColor:'#3FA796', borderWidth:1, borderRadius:3 }]},
+      options:{
+        responsive:true,
+        scales:{
+          x:{ ticks:CHART_DEFAULTS, grid:{display:false}, title:{display:true,text:'dni', color:'#8CA0B3'} },
+          y:{ ticks:CHART_DEFAULTS, grid:{color:'rgba(255,255,255,0.05)'} }
+        },
+        plugins:{ legend:{display:false} }
+      }
+    });
+    const legendData = [
+      ['p50', p50, 'var(--done)'], ['p70', p70, '#6FCF97'], ['p85', p85, 'var(--progress)'], ['p95', p95, 'var(--alert)']
+    ];
+    $('cycleLegend').innerHTML = legendData.map(([label,val,color]) =>
+      `<span class="legend-item"><span class="swatch" style="background:${color}"></span>${label}: ${fmtDays(val)} dni</span>`
+    ).join('');
+  }
+
+  /* ---- throughput weekly ---- */
+  function renderThroughputChart(doneIssues){
+    destroyChart('throughput');
+    if (!doneIssues.length) return;
+    const weekMap = {};
+    doneIssues.forEach(i => {
+      const d = new Date(i.done);
+      const monday = new Date(d);
+      const dow = (d.getDay()+6)%7;
+      monday.setDate(d.getDate()-dow);
+      const wk = dayKey(monday);
+      weekMap[wk] = (weekMap[wk]||0)+1;
+    });
+    const weeks = Object.keys(weekMap).sort();
+    charts.throughput = new Chart($('throughputChart'), {
+      type:'bar',
+      data:{ labels: weeks.map(w=>new Date(w).toLocaleDateString('pl-PL',{day:'2-digit',month:'2-digit'})), datasets:[
+        { label:'Ukończone zadania', data: weeks.map(w=>weekMap[w]), backgroundColor:'#E8A33Daa', borderColor:'#E8A33D', borderWidth:1, borderRadius:3 }
+      ]},
+      options:{
+        responsive:true,
+        scales:{
+          x:{ ticks:{...CHART_DEFAULTS, maxTicksLimit:12}, grid:{display:false} },
+          y:{ ticks:CHART_DEFAULTS, grid:{color:'rgba(255,255,255,0.05)'}, beginAtZero:true }
+        },
+        plugins:{ legend:{display:false} }
+      }
+    });
+  }
+
+  /* ---- WIP over time ---- */
+  function renderWipChart(list, from, to){
+    destroyChart('wip');
+    const relevant = list.filter(i=>i.started);
+    if (!relevant.length) return;
+    let start = from || new Date(Math.min(...relevant.map(i=>i.started)));
+    let end = to || new Date(Math.max(...relevant.map(i => i.done || i.started)));
+    const days = Math.max(Math.ceil(daysBetween(start,end)),1);
+    const step = Math.max(1, Math.ceil(days/180));
+    const labels = [], data = [];
+    for (let d=0; d<=days; d+=step){
+      const day = addDays(start,d);
+      const count = relevant.filter(i => i.started<=day && (!i.done || i.done>day)).length;
+      labels.push(day.toLocaleDateString('pl-PL',{day:'2-digit',month:'2-digit',year:'2-digit'}));
+      data.push(count);
+    }
+    charts.wip = new Chart($('wipChart'), {
+      type:'line',
+      data:{ labels, datasets:[{ label:'WIP', data, borderColor:'#6FCF97', backgroundColor:'#6FCF9733', fill:true, pointRadius:0, tension:0.2, borderWidth:2 }]},
+      options:{
+        responsive:true,
+        scales:{
+          x:{ ticks:{...CHART_DEFAULTS, maxTicksLimit:10}, grid:{color:'rgba(255,255,255,0.05)'} },
+          y:{ ticks:CHART_DEFAULTS, grid:{color:'rgba(255,255,255,0.05)'}, beginAtZero:true, title:{display:true,text:'zadania w toku',color:'#8CA0B3'} }
+        },
+        plugins:{ legend:{display:false} }
+      }
+    });
+  }
+
+  /* ---- aging report ---- */
+  function renderAging(cycleTimes){
+    const list = issues.filter(i => i.started && !i.done)
+      .map(i => ({...i, age: daysBetween(i.started, new Date())}))
+      .sort((a,b) => b.age - a.age);
+    const p50 = percentile(cycleTimes,50) ?? 0;
+    const p85 = percentile(cycleTimes,85) ?? Math.max(...list.map(i=>i.age), 1);
+    const maxAge = Math.max(...list.map(i=>i.age), p85, 1);
+
+    const container = $('agingList');
+    if (!list.length){
+      container.innerHTML = '<p class="sub">Brak zadań aktualnie w toku.</p>';
+      return;
+    }
+    container.innerHTML = list.map(i => {
+      let color = 'var(--done)';
+      if (i.age > p85) color = 'var(--alert)';
+      else if (i.age > p50) color = 'var(--progress)';
+      const widthPct = Math.min((i.age/maxAge)*100, 100);
+      return `<div class="aging-row">
+        <div class="key" title="${escapeHtml(i.type)}">${escapeHtml(i.key)}</div>
+        <div class="aging-bar-bg"><div class="aging-bar" style="width:${widthPct}%;background:${color};"></div></div>
+        <div class="days">${i.age.toFixed(0)}d</div>
+      </div>`;
+    }).join('');
+  }
+
+  /* ---- issue table ---- */
+  function renderIssueTable(list){
+    const table = $('issueTable');
+    let html = '<thead><tr><th>Klucz</th><th>Typ</th><th>Utworzono</th><th>Rozpoczęto</th><th>Zakończono</th><th>Cycle Time (d)</th><th>Lead Time (d)</th></tr></thead><tbody>';
+    const sorted = [...list].sort((a,b) => (b.done||b.started||b.created) - (a.done||a.started||a.created));
+    sorted.forEach(i => {
+      const ct = (i.started && i.done) ? daysBetween(i.started,i.done).toFixed(1) : '–';
+      const lt = (i.created && i.done) ? daysBetween(i.created,i.done).toFixed(1) : '–';
+      html += `<tr>
+        <td class="mono">${escapeHtml(i.key)}</td>
+        <td>${escapeHtml(i.type||'')}</td>
+        <td>${i.created ? i.created.toLocaleDateString('pl-PL') : '–'}</td>
+        <td>${i.started ? i.started.toLocaleDateString('pl-PL') : '–'}</td>
+        <td>${i.done ? i.done.toLocaleDateString('pl-PL') : '–'}</td>
+        <td class="mono">${ct}</td>
+        <td class="mono">${lt}</td>
+      </tr>`;
+    });
+    html += '</tbody>';
+    table.innerHTML = html;
+  }
+
+  /* ---- CSV export ---- */
+  $('btnExportCsv').addEventListener('click', () => {
+    const list = getFiltered();
+    const rows = [['Klucz','Typ','Utworzono','Rozpoczęto','Zakończono','CycleTime_dni','LeadTime_dni']];
+    list.forEach(i => {
+      const ct = (i.started && i.done) ? daysBetween(i.started,i.done).toFixed(2) : '';
+      const lt = (i.created && i.done) ? daysBetween(i.created,i.done).toFixed(2) : '';
+      rows.push([i.key, i.type||'', i.created?dayKey(i.created):'', i.started?dayKey(i.started):'', i.done?dayKey(i.done):'', ct, lt]);
+    });
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'flow-metrics.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+})();
+</script>
+</body>
+</html>
